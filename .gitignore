@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# NOTE: contracts/src/contracts/gen/ (importable as contracts.gen) is checked
+# in on purpose (inherited ADR-0003, twin-services). Never add it here.
+
+# Node (viz-svc frontend)
+node_modules/
+services/viz-svc/frontend/dist/
+
+# ROS
+install/
+log/
+
+# Container volumes (bind mounts)
+deploy/**/data/
+
+# Load-test raw runs: the summary table committed with ADR-0005 is the
+# artefact; per-run raw samples are not. Keep loadtest/runs/ out of git.
+loadtest/runs/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Env
+.env
+.env.local

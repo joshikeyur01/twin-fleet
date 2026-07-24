@@ -1,0 +1,15 @@
+# Keep the root build context lean: images copy manifests + source only.
+.git
+.venv
+**/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+.coverage
+htmlcov
+node_modules
+services/viz-svc/frontend/node_modules
+deploy/**/data
+loadtest/runs
+docs
+.github

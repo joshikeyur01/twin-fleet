@@ -1,0 +1,92 @@
+# Workspace root. Holds shared tool config and dev tooling only — every
+# runtime dependency belongs to the member that needs it (see docs/adr/).
+[project]
+name = "twin-fleet"
+version = "0.1.0"
+description = "Fleet-scale digital twin: the twin-services stack generalised from one UR5 to N, with a registry, coordinated commands, and a load test that finds the breakpoint."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Keyur Joshi", email = "keyurjoshi2104@gmail.com" }]
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=5.0",
+    "grpcio-tools>=1.66",   # stub generation only; generated code is checked in
+    "mypy-protobuf>=3.6",   # protoc plugin behind `just gen`'s --mypy_out
+    "types-grpcio>=1.0",    # typing for the grpc runtime module
+    "httpx2>=2.9",          # Starlette 1.x TestClient transport (httpx is deprecated there)
+]
+
+[tool.uv]
+package = false   # the root is a virtual project; members carry the code
+
+[tool.uv.workspace]
+members = [
+    "contracts",
+    "services/telemetry-svc",
+    "services/state-svc",
+    "services/command-svc",
+    "services/viz-svc",
+    "services/fleet-svc",
+    "simulators",
+]
+# No `bridge`: with no ROS 2 on this host the simulators publish namespaced MQTT
+# directly (see docs/context/VISION.md). `loadtest/` is a driver harness run via
+# `just loadtest`, not a packaged member — it uses the workspace venv.
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["contracts/src/contracts/gen"]   # generated protobuf stubs, never linted
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF", "TID", "PL"]
+ignore = ["PLR0913"]
+
+[tool.ruff.lint.per-file-ignores]
+# Asserting against literal status codes and values is what tests are for.
+"**/tests/*.py" = ["PLR2004"]
+# The load-test driver asserts against literal N/Hz/threshold values by design.
+"loadtest/**/*.py" = ["PLR2004"]
+
+[tool.ruff.lint.isort]
+# The src layouts hide these from ruff's first-party detection.
+known-first-party = [
+    "contracts",
+    "telemetry_svc",
+    "state_svc",
+    "command_svc",
+    "viz_svc",
+    "fleet_svc",
+    "simulators",
+]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = "contracts.gen.*"
+ignore_errors = true   # grpcio-generated stubs are not our code to fix
+
+[[tool.mypy.overrides]]
+module = "telemetry_svc.ingest"
+disallow_untyped_calls = false   # influxdb-client's Point builder API is untyped
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+addopts = "-ra --strict-markers --cov --cov-report=term-missing"
+markers = [
+    "slow: integration tests that touch a broker or database",
+    "chaos: tests that kill containers; require the compose stack running",
+    "fleet: multi-robot tests (e.g. five robots, kill one, coordinated command)",
+]
