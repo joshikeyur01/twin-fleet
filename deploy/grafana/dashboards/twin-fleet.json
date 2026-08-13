@@ -1,0 +1,119 @@
+{
+  "__comment": "Self-scaling fleet dashboard (ROADMAP Phase 4). A robot_id template variable is queried from the InfluxDB robot_id tag; the 'Joints' timeseries carries repeat=robot_id, so Grafana renders one panel per robot with zero JSON edits as the fleet grows. Prometheus drives fleet size, service readiness, and per-robot liveness (the kill demos). Status mappings: 1=UP/green, 0=DOWN/red.",
+  "title": "twin-fleet · UR5 fleet",
+  "uid": "twin-fleet",
+  "timezone": "browser",
+  "refresh": "2s",
+  "time": { "from": "now-5m", "to": "now" },
+  "schemaVersion": 39,
+  "templating": {
+    "list": [
+      {
+        "name": "robot_id",
+        "label": "Robot",
+        "type": "query",
+        "datasource": { "type": "influxdb", "uid": "influxdb" },
+        "query": "import \"influxdata/influxdb/schema\"\nschema.tagValues(bucket: \"telemetry\", tag: \"robot_id\")",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": null,
+        "current": { "text": "All", "value": "$__all" },
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Fleet overview",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "type": "stat",
+      "title": "Fleet size",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "targets": [{ "refId": "A", "expr": "max(twin_fleet_size)" }],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Coordinated command latency (p99)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 10, "x": 4, "y": 1 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, sum(rate(twin_fleet_command_latency_seconds_bucket[1m])) by (le))",
+          "legendFormat": "p99"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.50, sum(rate(twin_fleet_command_latency_seconds_bucket[1m])) by (le))",
+          "legendFormat": "p50"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "type": "state-timeline",
+      "title": "Service readiness",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 10, "x": 14, "y": 1 },
+      "targets": [
+        { "refId": "A", "expr": "twin_service_ready", "legendFormat": "{{service}}" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "1": { "text": "READY", "color": "green" }, "0": { "text": "DOWN", "color": "red" } } }
+          ]
+        }
+      }
+    },
+    {
+      "type": "state-timeline",
+      "title": "Robot liveness (twin_fleet_robot_up)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 24, "x": 0, "y": 5 },
+      "targets": [
+        { "refId": "A", "expr": "twin_fleet_robot_up", "legendFormat": "{{robot_id}}" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "1": { "text": "UP", "color": "green" }, "0": { "text": "DOWN", "color": "red" } } }
+          ]
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Per-robot joint traces",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 10 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Joints · $robot_id",
+      "datasource": { "type": "influxdb", "uid": "influxdb" },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 11 },
+      "repeat": "robot_id",
+      "repeatDirection": "h",
+      "maxPerRow": 2,
+      "targets": [
+        {
+          "refId": "A",
+          "query": "from(bucket: \"telemetry\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"joint_telemetry\")\n  |> filter(fn: (r) => r._field == \"value\")\n  |> filter(fn: (r) => r.metric == \"position\")\n  |> filter(fn: (r) => r.robot_id == \"${robot_id}\")\n  |> keep(columns: [\"_time\", \"_value\", \"joint\"])",
+          "legendFormat": "{{joint}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "rad" } }
+    }
+  ]
+}

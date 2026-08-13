@@ -1,0 +1,166 @@
+name: twin-fleet
+
+# Service builds use the repo root as context so images can copy contracts/.
+#
+# This file defines the FIXED stack: infra + the five services. The FLEET of N
+# robots is dynamic — `just fleet N=<k>` launches k individually-named simulator
+# containers from the `simulator` image (built here under the `sim` profile) onto
+# this compose network. Per-robot containers are deliberate: the kill-one-robot
+# demo (ADR-0003) needs to `docker kill` a single robot, and each needs a unique
+# human-readable `robot_<n>` id — neither is clean with `docker compose --scale`.
+# The lone `simulator` service below (profile-gated, robot_1) is for single-robot
+# dev and to keep the image in CI's `docker compose build`.
+
+x-svc-healthcheck: &svc-healthcheck
+  interval: 5s
+  timeout: 2s
+  retries: 3
+  start_period: 10s
+
+services:
+  # ─── infra ─────────────────────────────────────────────────────────────
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./deploy/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    restart: unless-stopped
+
+  influxdb:
+    image: influxdb:2.7
+    ports:
+      - "8086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: adminadmin
+      DOCKER_INFLUXDB_INIT_ORG: twin
+      DOCKER_INFLUXDB_INIT_BUCKET: telemetry
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: dev-token-change-me
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana-oss:11.2.0
+    depends_on: [influxdb, prometheus]
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    restart: unless-stopped
+
+  # ─── the five services (fleet-aware; route by robot_id) ─────────────────
+  telemetry-svc:
+    build:
+      context: .
+      dockerfile: services/telemetry-svc/Dockerfile
+    depends_on: [mosquitto, influxdb]
+    ports:
+      - "8001:8001"
+    environment:
+      MQTT_HOST: mosquitto
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: dev-token-change-me
+      INFLUX_ORG: twin
+      INFLUX_BUCKET: telemetry
+    healthcheck:
+      <<: *svc-healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8001/healthz/ready', timeout=2)"]
+    restart: unless-stopped
+
+  state-svc:
+    build:
+      context: .
+      dockerfile: services/state-svc/Dockerfile
+    depends_on: [mosquitto]
+    ports:
+      - "8002:8002"
+      - "50051:50051"
+    environment:
+      MQTT_HOST: mosquitto
+    healthcheck:
+      <<: *svc-healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8002/healthz/ready', timeout=2)"]
+    restart: unless-stopped
+
+  command-svc:
+    build:
+      context: .
+      dockerfile: services/command-svc/Dockerfile
+    depends_on: [mosquitto]
+    ports:
+      - "8003:8003"
+    environment:
+      MQTT_HOST: mosquitto
+    healthcheck:
+      <<: *svc-healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8003/healthz/ready', timeout=2)"]
+    restart: unless-stopped
+
+  viz-svc:
+    build:
+      context: .
+      dockerfile: services/viz-svc/Dockerfile
+    depends_on: [state-svc]
+    ports:
+      - "8004:8004"
+    environment:
+      STATE_GRPC_TARGET: state-svc:50051
+    healthcheck:
+      <<: *svc-healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8004/healthz/ready', timeout=2)"]
+    restart: unless-stopped
+
+  fleet-svc:
+    build:
+      context: .
+      dockerfile: services/fleet-svc/Dockerfile
+    depends_on: [mosquitto, command-svc]
+    ports:
+      - "8005:8005"
+    environment:
+      MQTT_HOST: mosquitto
+      COMMAND_SVC_URL: http://command-svc:8003
+      # A robot unseen for this many seconds is dropped from the registry
+      # (ADR-0003 liveness window; Last-Will is the fast path).
+      FLEET_LIVENESS_TIMEOUT_S: "3"
+    healthcheck:
+      <<: *svc-healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8005/healthz/ready', timeout=2)"]
+    restart: unless-stopped
+
+  # ─── simulator image (dynamic fleet; see header) ────────────────────────
+  # Profile-gated so plain `docker compose up` starts the stack WITHOUT robots.
+  # Present here so CI builds the image and `docker compose --profile sim up
+  # simulator` runs a single robot_1 for dev. The N-robot fleet is launched by
+  # `just fleet N=<k>` as individually-named containers on this network.
+  simulator:
+    profiles: ["sim"]
+    build:
+      context: .
+      dockerfile: simulators/Dockerfile
+    depends_on: [mosquitto]
+    environment:
+      MQTT_HOST: mosquitto
+      ROBOT_ID: robot_1
+      TELEMETRY_HZ: "50"
+    restart: "no"   # a killed robot stays dead — that IS the demo (ADR-0003)
+
+volumes:
+  influxdb-data:
+  grafana-data:

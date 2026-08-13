@@ -1,0 +1,18 @@
+# Scrapes /metrics from the five services. The 2s interval is deliberately
+# aggressive for a dev stack: a killed service's status cell should flip red
+# within one scrape interval, and fleet gauges (size, per-robot up) should track
+# the fleet in near-real-time.
+
+global:
+  scrape_interval: 2s
+  scrape_timeout: 1s
+
+scrape_configs:
+  - job_name: twin-fleet
+    static_configs:
+      - targets:
+          - telemetry-svc:8001
+          - state-svc:8002
+          - command-svc:8003
+          - viz-svc:8004
+          - fleet-svc:8005
