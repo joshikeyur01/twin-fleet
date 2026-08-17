@@ -1,0 +1,81 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.11.x"  # matches local dev; --all-packages needs newer than twin-hello's 0.4.x
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install workspace
+        run: uv sync --all-groups --all-packages
+
+      - name: Lint
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Type-check
+        run: uv run mypy contracts services simulators loadtest
+
+      - name: Test
+        run: uv run pytest -m "not slow and not chaos"
+
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.11.x"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install workspace
+        run: uv sync --all-groups --all-packages
+
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Generated stubs are current
+        run: |
+          just gen
+          git diff --exit-code contracts/src/contracts/gen \
+            || { echo "::error::contracts/gen is stale — run 'just gen' and commit"; exit 1; }
+
+      # Crude on purpose: services and simulators must import payload shapes from
+      # contracts, never define them. A BaseModel subclass outside contracts/ is a
+      # bug (AGENTS.md), even if it works. Tighten to an AST check if this ever
+      # false-positives.
+      - name: No local schemas outside contracts
+        run: |
+          if grep -rnE "class .*\(.*BaseModel.*\)" services/ simulators/ --include="*.py"; then
+            echo "::error::payload shape declared outside contracts/ — move it there"
+            exit 1
+          fi
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate docker-compose
+        run: docker compose config >/dev/null
+
+      - name: Build service images
+        run: docker compose build
